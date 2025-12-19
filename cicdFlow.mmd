@@ -1,0 +1,14 @@
+flowchart LR
+
+A[Developer Pushes Code] --> B[GitHub Actions CI]
+B --> C[Build Python Project]
+C --> D[Zip src Folder]
+D --> E[Publish Artifact to GitHub Packages]
+
+E --> F[Octopus External Feed Polling]
+F --> G[Octopus Detects New Package]
+G --> H[Auto Create Release]
+H --> I[Deploy to DEV]
+
+I --> J[Promote to QA]
+J --> K[Promote to PROD]

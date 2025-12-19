@@ -1,0 +1,37 @@
+name: Build Python Project
+
+on:
+  push:
+    branches:
+      - feature/cicd   # test branch
+      - main           # protected branch with reviews
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Package src folder
+        run: |
+          mkdir artifacts
+          powershell Compress-Archive -Path src -DestinationPath artifacts/crmdsl-reconciliation-app.${{ github.run_number }}.zip
+
+      - name: Upload artifact to GitHub Packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: crmdsl-reconciliation-app
+          path: artifacts/crmdsl-reconciliation-app.${{ github.run_number }}.zip
+
