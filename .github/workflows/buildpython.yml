@@ -1,0 +1,83 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+      - feature/**
+      - hotfix/**
+      - release/**
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Python Package and Create Octopus Release
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Install Python dependencies (CI validation only)
+      - name: Install Dependencies
+        env:
+          PIP_INDEX_URL: ${{ vars.PIP_INDEX_URL }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 3. Create .nuspec for Python project
+      - name: Generate .nuspec
+        shell: pwsh
+        run: |
+          $version = "1.0.${{ github.run_number }}"
+          $packageId = "crmdsl-reconciliation-app"
+          $nuspecPath = "$packageId.nuspec"
+
+          @"
+<?xml version="1.0"?>
+<package>
+  <metadata>
+    <id>$packageId</id>
+    <version>$version</version>
+    <authors>Reconciliation Team</authors>
+    <owners>Reconciliation Team</owners>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>CRM DSL Reconciliation Application</description>
+    <tags>python reconciliation</tags>
+  </metadata>
+  <files>
+    <file src="src\**\*" target="src" />
+  </files>
+</package>
+"@ | Out-File -FilePath $nuspecPath -Encoding utf8
+
+      # 4. Pack into .nupkg (Python equivalent of dotnet pack)
+      - name: NuGet Pack
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          nuget pack "crmdsl-reconciliation-app.nuspec" `
+            -Version "1.0.${{ github.run_number }}" `
+            -OutputDirectory "artifacts"
+
+      # 5. Push .nupkg to GitHub Packages
+      - name: NuGet Push
+        uses: your-org/nuget-push-action@v1
+        with:
+          api_key: ${{ secrets.GITHUB_TOKEN }}
+          package_path: artifacts/*.nupkg
+
+      # 6. Generate release notes (optional)
+      - name: Generate Release Notes
+        id: release_notes
+        uses: your-org/generate-release-notes@v1
+
+      # 7. Create Octopus Release
+      - name: Create Octopus Release
+        uses: your-org/create-octopus-release@v1
+        with:
+          project: crmdsl-reconciliation-app
+          release_number: ${{ github.run_number }}
+          api_key: ${{ secrets.OCTOPUS_API_KEY }}
