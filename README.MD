@@ -386,8 +386,43 @@ Octopus Deploy handles all deployment automation and environment promotion.
 - No environment drift
 
 ---
+### nupkg
 
-## ✅ Visual Overview
+src/
+    *.py
+    requirements.txt
+packages/
+    <all wheels downloaded from JFrog>
+
+
+### post deploy script 
+
+Write-Host "Starting offline Python dependency installation..."
+
+$requirements = ".\src\requirements.txt"
+$packageDir   = ".\packages"
+
+if (-Not (Test-Path $requirements)) {
+    Write-Error "requirements.txt not found at $requirements"
+    exit 1
+}
+
+if (-Not (Test-Path $packageDir)) {
+    Write-Error "Offline package directory not found at $packageDir"
+    exit 1
+}
+
+Write-Host "Installing dependencies from offline wheel cache..."
+pip install `
+    --no-index `
+    --find-links $packageDir `
+    -r $requirements
+
+Write-Host "Offline dependency installation complete."
+
+
+
+## ✅ Visual Overviews
 
 ```mermaid
 flowchart LR
@@ -403,3 +438,69 @@ G --> H[Deploy to DEV]
 
 H --> I[Promote to QA]
 I --> J[Promote to PROD]
+
+
+flowchart TD
+
+    A[Developer Pushes Code<br/>main / feature / hotfix] --> B[GitHub Actions CI]
+
+    subgraph CI[GitHub Actions Build Pipeline]
+        B1[Validate Python Syntax]
+        B2[Download Wheels from JFrog<br/>pip download → packages/]
+        B3[Bundle src/ + packages/<br/>into .nupkg]
+        B4[Publish .nupkg to GitHub Packages]
+        B5[Create Octopus Release]
+
+        B --> B1 --> B2 --> B3 --> B4 --> B5
+    end
+
+    B5 --> C[Octopus Deploy]
+
+    subgraph CD[Octopus Deployment Process]
+        C1[Fetch .nupkg from GitHub Packages]
+        C2[Extract Package on Windows VM]
+        C3[Post‑Deploy Script:<br/>pip install --no-index --find-links packages<br/>-r src/requirements.txt]
+        C --> C1 --> C2 --> C3
+    end
+
+    C3 --> D[Offline Windows VM<br/>Fully Isolated Deployment]
+
+sequenceDiagram
+    autonumber
+
+    participant Dev as Developer
+    participant GH as GitHub Actions (CI)
+    participant JF as JFrog Artifactory
+    participant GP as GitHub Packages (NuGet Feed)
+    participant OD as Octopus Deploy (CD)
+    participant VM as Offline Windows VM
+
+    Dev->>GH: Push code (main/feature/hotfix)
+
+    GH->>GH: Validate Python syntax
+    GH->>JF: pip download -r src/requirements.txt<br/>--index-url JFrog<br/>--trusted-host
+    JF-->>GH: Return wheels (.whl) + tarballs
+
+    GH->>GH: Bundle src/ + packages/ into .nupkg
+    GH->>GP: Publish .nupkg to GitHub Packages
+    GP-->>GH: Package stored
+
+    GH->>OD: Create Octopus Release
+
+    OD->>GP: Fetch .nupkg
+    GP-->>OD: Return package
+
+    OD->>VM: Deploy package to offline VM
+    VM->>VM: Extract src/ and packages/
+
+    VM->>VM: pip install --no-index<br/>--find-links packages<br/>-r src/requirements.txt
+
+    VM-->>OD: Deployment complete
+
+'''
+
+
+
+
+
+
