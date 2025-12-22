@@ -1,0 +1,135 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+      - feature/**
+      - hotfix/**
+      - release/**
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Python Package and Create Octopus Release
+    runs-on: windows-latest
+
+    steps:
+      # 1. Checkout
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Validate Python syntax
+      - name: Validate Python Syntax
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -Filter *.py -Path src | ForEach-Object {
+            python -m py_compile $_.FullName
+          }
+        continue-on-error: ${{ vars.SILENT_MODE == 'true' }}
+
+      # 3. Cache offline pip packages
+      - name: Cache offline pip packages
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: packages
+          key: offline-pip-${{ runner.os }}-${{ hashFiles('src/requirements.txt') }}
+          restore-keys: |
+            offline-pip-${{ runner.os }}-
+        continue-on-error: ${{ vars.SILENT_MODE == 'true' }}
+
+      # 4. Download pip packages for offline install (JFrog only)
+      - name: Download pip packages for offline install
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          PIP_INDEX_URL: ${{ vars.PIP_INDEX_URL }}        # e.g. https://jfrog.company.com/api/pypi/pypi/simple
+          TRUSTED_HOST: ${{ vars.PIP_TRUSTED_HOST }}      # e.g. jfrog.company.com
+        run: |
+          python -m pip install --upgrade pip
+
+          New-Item -ItemType Directory -Force -Path packages | Out-Null
+
+          pip download `
+            --index-url $env:PIP_INDEX_URL `
+            --trusted-host $env:TRUSTED_HOST `
+            --no-deps `
+            -r src/requirements.txt `
+            -d packages
+        continue-on-error: ${{ vars.SILENT_MODE == 'true' }}
+
+      # 5. Optional: Install dependencies using trusted-host (CI validation only)
+      - name: Install Dependencies (Trusted Host)
+        if: ${{ vars.ENABLE_TRUSTED_PIP_INSTALL == 'true' }}
+        shell: pwsh
+        env:
+          PIP_INDEX_URL: ${{ vars.PIP_INDEX_URL }}
+          TRUSTED_HOST: ${{ vars.PIP_TRUSTED_HOST }}
+        run: |
+          pip install `
+            --trusted-host $env:TRUSTED_HOST `
+            --index-url $env:PIP_INDEX_URL `
+            -r src/requirements.txt
+        continue-on-error: ${{ vars.SILENT_MODE == 'true' }}
+
+      # 6. Generate .nuspec
+      - name: Generate .nuspec
+        shell: pwsh
+        run: |
+          $version = "1.0.${{ github.run_number }}"
+          $packageId = "crmdsl-reconciliation-app"
+          $nuspecPath = "$packageId.nuspec"
+
+          @"
+<?xml version="1.0"?>
+<package>
+  <metadata>
+    <id>$packageId</id>
+    <version>$version</version>
+    <authors>Reconciliation Team</authors>
+    <owners>Reconciliation Team</owners>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>CRM DSL Reconciliation Application</description>
+    <tags>python reconciliation offline</tags>
+  </metadata>
+  <files>
+    <file src="src\**\*" target="src" />
+    <file src="packages\**\*" target="packages" />
+  </files>
+</package>
+"@ | Out-File -FilePath $nuspecPath -Encoding utf8
+        continue-on-error: ${{ vars.SILENT_MODE == 'true' }}
+
+      # 7. Pack into .nupkg
+      - name: NuGet Pack
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          dotnet nuget pack "crmdsl-reconciliation-app.nuspec" `
+            -Version "1.0.${{ github.run_number }}" `
+            -OutputDirectory "artifacts"
+        continue-on-error: ${{ vars.SILENT_MODE == 'true' }}
+
+      # 8. Push .nupkg to GitHub Packages
+      - name: NuGet Push
+        uses: your-org/nuget-push-action@v1
+        with:
+          api_key: ${{ secrets.GITHUB_TOKEN }}
+          package_path: artifacts/*.nupkg
+        continue-on-error: ${{ vars.SILENT_MODE == 'true' }}
+
+      # 9. Generate release notes (optional)
+      - name: Generate Release Notes
+        id: release_notes
+        uses: your-org/generate-release-notes@v1
+        continue-on-error: ${{ vars.SILENT_MODE == 'true' }}
+
+      # 10. Create Octopus Release (disabled in silent mode)
+      - name: Create Octopus Release
+        if: ${{ vars.SILENT_MODE != 'true' }}
+        uses: your-org/create-octopus-release@v1
+        with:
+          project: crmdsl-reconciliation-app
+          release_number: ${{ github.run_number }}
+          api_key: ${{ secrets.OCTOPUS_API_KEY }}
